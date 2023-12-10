@@ -102,28 +102,31 @@ def delete_number():
         log.info("Simulating delete_number")
         return
     driver.find_element(By.CSS_SELECTOR, "div:nth-child(1) > .tooltip .ui-icon-only-button").click()
-    time.sleep(3)
+    time.sleep(4)
+
 
 def main():
     log.info("Update Telekom Negativliste started")
 
     log.info("CLEAN LIST")
     errors = 0
-    for i in range(55):
+    for i in range(100):
         try:
             delete_number()
-            log.info("Deleted entry")
+            log.info("%s - Deleted entry" % i)
         except:
+            time.sleep(5)
             amount = driver.find_element(By.CSS_SELECTOR, ".no-entries").text
-            log.info("amount is " + amount)
             if amount == "Keine":
-                log.info("Not deleted - Empty! - Break")
+                log.info("List empty! - Break")
                 break
             errors = errors + 1
             log.info("Not deleted - Empty?")
             if errors > 50:
+                log.error("50 Errors. Stop deleting. Something is weird here.")
                 break
 
+    time.sleep(2)
     log.info("Block +31")
     add_number("+31")
 
