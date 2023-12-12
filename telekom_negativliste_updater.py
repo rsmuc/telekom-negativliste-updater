@@ -1,4 +1,5 @@
 # Telekom Negativliste Updater - Version 0.0.1
+
 import argparse
 import logging
 import requests
@@ -13,12 +14,13 @@ from selenium.webdriver.firefox.service import Service
 from selenium.webdriver.support import expected_conditions as EC
 from selenium.webdriver.support.ui import WebDriverWait
 from systemd.journal import JournalHandler
+from datetime import datetime
 
 warnings.filterwarnings("ignore", category=DeprecationWarning) 
 
 log = logging.getLogger('demo')
 log.addHandler(JournalHandler())
-log_formatter = logging.Formatter('%(levelname)s: %(message)s')
+log_formatter = logging.Formatter('%(asctime)s - %(levelname)s: %(message)s')
 stream_handler = logging.StreamHandler()
 stream_handler.setFormatter(log_formatter)
 log.addHandler(stream_handler)
@@ -83,12 +85,22 @@ def add_number(phone_number):
         return
     try:
         log.info("insert number")
-        driver.find_element(By.CSS_SELECTOR, ".add-number").click()
-        driver.find_element(By.CSS_SELECTOR, ".add-number").send_keys(phone_number)
-        driver.find_element(By.CSS_SELECTOR, ".add-item").click()
+        # wait until add-number field is active
+        add_number_field = WebDriverWait(driver, 10).until(
+            EC.element_to_be_clickable((By.CSS_SELECTOR, ".add-number"))
+        )
+        add_number_field.click()
+        add_number_field.send_keys(phone_number)
+
+        # wait until plus icon is active
+        add_item_button = WebDriverWait(driver, 10).until(
+            EC.element_to_be_clickable((By.CSS_SELECTOR, ".add-item"))
+        )
+        add_item_button.click()
+
         time.sleep(2)
         log.info("clean input field")
-        # cleanup input field if something went wrong
+        # cleanup add number field if something went wrong
         driver.find_element(By.CSS_SELECTOR, ".add-number").click()
         driver.find_element(By.CSS_SELECTOR, ".add-number").clear()
         driver.find_element(By.CSS_SELECTOR, ".list-header").click()
@@ -97,13 +109,55 @@ def add_number(phone_number):
         time.sleep(5)
 
 
+def wait_for_element_to_be_clickable(driver, element_selector, overlay_selector):
+    return WebDriverWait(driver, 10).until(
+        lambda driver: (
+            EC.visibility_of_element_located((By.CSS_SELECTOR, element_selector))(driver) and
+            EC.invisibility_of_element_located((By.CSS_SELECTOR, overlay_selector))(driver) and
+            EC.element_to_be_clickable((By.CSS_SELECTOR, element_selector))(driver)
+        )
+    )
+
+
 def delete_number():
     if simulate_mode:
         log.info("Simulating delete_number")
         return
-    driver.find_element(By.CSS_SELECTOR, "div:nth-child(1) > .tooltip .ui-icon-only-button").click()
-    time.sleep(4)
+    delete_button_selector = "div:nth-child(1) > .tooltip .ui-icon-only-button"
+    overlay_selector = ".list-overlay"
 
+    # Wait for the element to be clickable and not obscured by the overlay
+    delete_button = wait_for_element_to_be_clickable(driver, delete_button_selector, overlay_selector)
+
+    # Now, the delete_button is guaranteed to be visible, not obscured, and clickable
+    delete_button.click()
+
+    time.sleep(2)
+
+
+def enable_blocklist():
+    # enable blocklist
+    try:
+        log.info("activate negativliste")
+        driver.find_element(By.CSS_SELECTOR, ".secondary").click()
+        driver.find_element(By.CSS_SELECTOR, ".black-list .border").click()
+    except Exception as activate_exception:
+        log.error("Activate negativliste FAILED: %s", str(activate_exception))
+
+
+def get_phone_numbers():
+    page = requests.get(number_source1)
+    soup = BeautifulSoup(page.content, 'html.parser')
+    links = soup.select('a')
+
+    numbers = []
+
+    for i, link in enumerate(links):
+        if link.text.startswith("0"):
+            number = link.text
+            numbers.append(number)
+
+    return numbers
 
 def main():
     log.info("Update Telekom Negativliste started")
@@ -114,7 +168,9 @@ def main():
         try:
             delete_number()
             log.info("%s - Deleted entry" % i)
-        except:
+        except Exception as ex1:
+            log.info("Delete entry %s failed" % i)
+            log.error("FAILED delete: %s", str(ex1))
             time.sleep(5)
             amount = driver.find_element(By.CSS_SELECTOR, ".no-entries").text
             if amount == "Keine":
@@ -132,20 +188,23 @@ def main():
 
     log.info("Started with TOP SPAM")
 
-    page = requests.get(number_source1)
-    soup = BeautifulSoup(page.content, 'html.parser')
-    title = soup.title.text
-    links = soup.select('a')
-    for i, link in enumerate(links):
-        if link.text.startswith("0"):
-            number = link.text
-            add_number(number)
-            log.info("added top spam number " + str(i) + " " + number)
+    phone_numbers = get_phone_numbers()
 
-        if i > 55:
+    for i, phone_number in enumerate(phone_numbers):
+        add_number(phone_number)
+        log.info("added top spam number " + str(i) + " " + phone_number)
+
+        # check if we already have 50 numbers added
+        amount = driver.find_element(By.CSS_SELECTOR, ".amount").text
+        if amount == "50":
+            log.info("50 numbers added - break")
             break
 
-    # run he
+        # if we tried 100, something seems to be wrong. so stop it...
+        if i > 100:
+            break
+
+
 if interactive_mode:
     # Running on Fedora with GNOME
     driver = webdriver.Firefox()
@@ -165,7 +224,6 @@ try:
 
     main()
 
-
     # check amount
     amount = driver.find_element(By.CSS_SELECTOR, ".amount").text
     log.info("amount is " + amount)
@@ -175,16 +233,14 @@ try:
         log.error("amount is too low. try again.")
         main()
 
-    # enable blocklist
-    try:
-        log.info("activate negativliste")
-        driver.find_element(By.CSS_SELECTOR, ".secondary").click()
-        driver.find_element(By.CSS_SELECTOR, ".black-list .border").click()
-    except:
-        log.error("activate negativliste FAILED")
+    enable_blocklist()
+
+except Exception as ex1:
+    log.error("FAILED: %s", str(ex1))
+
 
 finally:
     # end selenium
     driver.quit()
-    log.info("finished")
+    log.info("Finished")
     exit()
